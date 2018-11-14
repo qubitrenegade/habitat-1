@@ -15,6 +15,7 @@
 mod composite_spec;
 mod context;
 pub mod health;
+mod hook_runner;
 pub mod hooks;
 mod spawned_future;
 pub mod spec;
