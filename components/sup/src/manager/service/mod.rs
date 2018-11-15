@@ -12,55 +12,67 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// TODO (CM): Take another look at the public exports of this module
+// (specifically, `pub mod spec`, and the various `pub use`
+// statements. Playing fast-and-loose with our imports has led to code
+// that's more confusing that it probably needs to be.
+
+// TODO (CM): Take a deeper look at the direct consumption of
+// Prost-generated types (habitat_sup_protocol::types::*) in
+// here. Ideally, those would exist only at the periphery of the
+// system, and we'd use separate internal types for our core logic.
+
 mod composite_spec;
 mod context;
-pub mod health;
+mod health;
 mod hook_runner;
-pub mod hooks;
+mod hooks;
 mod spawned_future;
 pub mod spec;
 mod supervisor;
 mod terminator;
 
-use std;
-use std::collections::HashSet;
-use std::fmt;
-use std::fs::File;
-use std::io::prelude::*;
-use std::path::{Path, PathBuf};
-use std::result;
-use std::sync::{Arc, RwLock};
-use std::time::Instant;
-
-use crate::butterfly::rumor::service::Service as ServiceRumor;
-use crate::common::templating::config::CfgRenderer;
-pub use crate::common::templating::config::{Cfg, UserConfigPath};
-use crate::common::templating::hooks::Hook;
-pub use crate::common::templating::package::{Env, Pkg, PkgProxy};
-use crate::hcore;
-use crate::hcore::crypto::hash;
-use crate::hcore::fs::{svc_hooks_path, SvcDir, FS_ROOT_PATH};
-use crate::hcore::package::metadata::Bind;
-use crate::hcore::package::{PackageIdent, PackageInstall};
-use crate::hcore::service::{HealthCheckInterval, ServiceGroup};
-use crate::launcher_client::LauncherCli;
-pub use crate::protocol::types::{BindingMode, ProcessState, Topology, UpdateStrategy};
+pub use self::{
+    composite_spec::CompositeSpec,
+    health::HealthCheck,
+    hooks::HealthCheckHook,
+    spec::{DesiredState, ServiceSpec, Spec},
+};
+use self::{context::RenderContext, hooks::HookTable, spec::ServiceBind, supervisor::Supervisor};
+use crate::{
+    census::{CensusGroup, CensusRing, ElectionStatus, ServiceFile},
+    error::{Error, Result, SupError},
+    manager::{FsCfg, GatewayState, Sys},
+};
+use futures::{future, Future, IntoFuture};
+use habitat_butterfly::rumor::service::Service as ServiceRumor;
+use habitat_common::templating::{
+    config::{Cfg, CfgRenderer},
+    hooks::Hook,
+    package::{Pkg, PkgProxy},
+};
+use habitat_core::{
+    crypto::hash,
+    fs::{svc_hooks_path, SvcDir, FS_ROOT_PATH},
+    package::{metadata::Bind, PackageIdent, PackageInstall},
+    service::{HealthCheckInterval, ServiceGroup},
+};
+use habitat_launcher_client::LauncherCli;
+use habitat_sup_protocol::types::BindingMode;
+pub use habitat_sup_protocol::types::{ProcessState, Topology, UpdateStrategy};
 use prometheus::{HistogramTimer, HistogramVec};
-use serde::ser::SerializeStruct;
-use serde::{Serialize, Serializer};
+use serde::{ser::SerializeStruct, Serialize, Serializer};
+use std::{
+    collections::HashSet,
+    fmt,
+    fs::{self, File},
+    io::prelude::*,
+    path::{Path, PathBuf},
+    result,
+    sync::{Arc, RwLock},
+    time::Instant,
+};
 use time::Timespec;
-
-pub use self::composite_spec::CompositeSpec;
-use self::context::RenderContext;
-pub use self::health::HealthCheck;
-use self::hooks::HookTable;
-pub use self::spec::{BindMap, DesiredState, IntoServiceSpec, ServiceBind, ServiceSpec, Spec};
-use self::supervisor::Supervisor;
-use super::ShutdownReason;
-use super::Sys;
-use crate::census::{CensusGroup, CensusRing, ElectionStatus, ServiceFile};
-use crate::error::{Error, Result, SupError};
-use crate::manager;
 
 static LOGKEY: &'static str = "SR";
 
@@ -149,7 +161,7 @@ pub struct Service {
     config_from: Option<PathBuf>,
     #[serde(skip_serializing)]
     scheduled_health_check: Option<Instant>,
-    manager_fs_cfg: Arc<manager::FsCfg>,
+    manager_fs_cfg: Arc<FsCfg>,
     #[serde(rename = "process")]
     supervisor: Supervisor,
     svc_encrypted_password: Option<String>,
@@ -161,7 +173,7 @@ pub struct Service {
     /// update. Used to control when templates are re-rendered.
     defaults_updated: bool,
     #[serde(skip_serializing)]
-    gateway_state: Arc<RwLock<manager::GatewayState>>,
+    gateway_state: Arc<RwLock<GatewayState>>,
 }
 
 impl Service {
@@ -169,9 +181,9 @@ impl Service {
         sys: Arc<Sys>,
         package: PackageInstall,
         spec: ServiceSpec,
-        manager_fs_cfg: Arc<manager::FsCfg>,
+        manager_fs_cfg: Arc<FsCfg>,
         organization: Option<&str>,
-        gateway_state: Arc<RwLock<manager::GatewayState>>,
+        gateway_state: Arc<RwLock<GatewayState>>,
     ) -> Result<Service> {
         spec.validate(&package)?;
         let all_pkg_binds = package.all_binds()?;
@@ -244,9 +256,9 @@ impl Service {
     pub fn load(
         sys: Arc<Sys>,
         spec: ServiceSpec,
-        manager_fs_cfg: Arc<manager::FsCfg>,
+        manager_fs_cfg: Arc<FsCfg>,
         organization: Option<&str>,
-        gateway_state: Arc<RwLock<manager::GatewayState>>,
+        gateway_state: Arc<RwLock<GatewayState>>,
     ) -> Result<Service> {
         // The package for a spec should already be installed.
         let fs_root_path = Path::new(&*FS_ROOT_PATH);
@@ -286,11 +298,32 @@ impl Service {
         }
     }
 
-    pub fn stop(&mut self, launcher: &LauncherCli, cause: ShutdownReason) {
-        match self.supervisor.stop(launcher, cause) {
-            Ok(_) => self.post_stop(),
-            Err(err) => outputln!(preamble self.service_group, "Service stop failed: {}", err),
+    /// Return a future that will shut down a service, performing any
+    /// necessary cleanup, and run its post-stop hook, if any.
+    pub fn stop(&self) -> impl Future<Item = (), Error = SupError> {
+        let service_group = self.service_group.clone();
+        let gs = Arc::clone(&self.gateway_state);
+
+        let f = self.supervisor.stop().and_then(move |_| {
+            gs.write()
+                .expect("GatewayState lock is poisoned")
+                .health_check_data
+                .remove(&service_group);
+            Ok(())
+        });
+
+        // eww
+        let service_group_2 = self.service_group.clone();
+        match self.post_stop() {
+            None => future::Either::A(f),
+            Some(hook) => {
+                future::Either::B(f.and_then(|_| hook.into_future().map(|_exitvalue| ())))
+            }
         }
+        .map_err(move |e| {
+            outputln!(preamble service_group_2, "Service stop failed: {}", e);
+            e
+        })
     }
 
     /// Runs the reconfigure hook if present, otherwise restarts the service.
@@ -646,54 +679,6 @@ impl Service {
         cfg_changed
     }
 
-    /// Replace the package of the running service and restart its system process.
-    pub fn update_package(&mut self, package: PackageInstall, launcher: &LauncherCli) {
-        match Pkg::from_install(&package) {
-            Ok(pkg) => {
-                outputln!(preamble self.service_group,
-                            "Updating service {} to {}", self.pkg.ident, pkg.ident);
-
-                self.schedule_special_health_check();
-
-                match CfgRenderer::new(&Self::config_root(&pkg, self.config_from.as_ref())) {
-                    Ok(renderer) => self.config_renderer = renderer,
-                    Err(e) => {
-                        outputln!(preamble self.service_group,
-                                  "Failed to load config templates after updating package, {}", e);
-                        return;
-                    }
-                }
-                self.hooks = HookTable::load(
-                    &pkg.name,
-                    &Self::hooks_root(&pkg, self.config_from.as_ref()),
-                    svc_hooks_path(self.service_group.service()),
-                );
-                self.pkg = pkg;
-            }
-            Err(err) => {
-                outputln!(preamble self.service_group,
-                          "Unexpected error while updating package, {}", err);
-                return;
-            }
-        }
-        if let Err(err) = self.supervisor.stop(launcher, ShutdownReason::PkgUpdating) {
-            outputln!(preamble self.service_group,
-                      "Error stopping process while updating package: {}", err);
-        }
-
-        match self.cfg.update_defaults_from_package(&self.pkg) {
-            Ok(maybe_updated) => {
-                self.defaults_updated = maybe_updated;
-            }
-            Err(err) => {
-                outputln!(preamble self.service_group,
-                          "Unexpected error while checking for updated package defaults: {}", err);
-            }
-        }
-
-        self.initialized = false;
-    }
-
     pub fn to_rumor(&self, incarnation: u64) -> ServiceRumor {
         let exported = match self.cfg.to_exported(&self.pkg) {
             Ok(exported) => Some(exported),
@@ -760,23 +745,17 @@ impl Service {
             );
         }
     }
-
-    fn post_stop(&mut self) {
-        let _timer = hook_timer("post-stop");
-
-        if let Some(ref hook) = self.hooks.post_stop {
-            hook.run(
-                &self.service_group,
-                &self.pkg,
-                self.svc_encrypted_password.as_ref(),
-            );
-        }
-
-        self.gateway_state
-            .write()
-            .expect("GatewayState lock is poisoned")
-            .health_check_data
-            .remove(&self.service_group);
+    // This hook method looks different from all the others because
+    // it's the only one that runs async right now.
+    fn post_stop(&self) -> Option<hook_runner::HookRunner<hooks::PostStopHook>> {
+        self.hooks.post_stop.as_ref().map(|hook| {
+            hook_runner::HookRunner::new(
+                Arc::clone(&hook),
+                self.service_group.clone(),
+                self.pkg.clone(),
+                self.svc_encrypted_password.clone(),
+            )
+        })
     }
 
     pub fn suitability(&self) -> Option<u64> {
@@ -849,14 +828,14 @@ impl Service {
         let svc_run = self.pkg.svc_path.join(hooks::RunHook::file_name());
         match self.hooks.run {
             Some(ref hook) => {
-                std::fs::copy(hook.path(), &svc_run)?;
+                fs::copy(hook.path(), &svc_run)?;
                 Self::set_hook_permissions(&svc_run.to_str().unwrap())?;
             }
             None => {
                 let run = self.pkg.path.join(hooks::RunHook::file_name());
-                match std::fs::metadata(&run) {
+                match fs::metadata(&run) {
                     Ok(_) => {
-                        std::fs::copy(&run, &svc_run)?;
+                        fs::copy(&run, &svc_run)?;
                         Self::set_hook_permissions(&svc_run)?;
                     }
                     Err(err) => {
@@ -1082,7 +1061,7 @@ impl Service {
                       file.as_ref().display(), e);
             return false;
         }
-        if let Err(e) = std::fs::rename(&new_filename, &file) {
+        if let Err(e) = fs::rename(&new_filename, &file) {
             outputln!(preamble self.service_group,
                       "Failed to move cache file {}, {}",
                       file.as_ref().display(), e);
@@ -1231,21 +1210,11 @@ impl<'a> Serialize for ServiceProxy<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use std::path::PathBuf;
-    use std::str::FromStr;
-
-    use crate::hcore::package::{ident::PackageIdent, PackageInstall};
+    use crate::{config::GossipListenAddr, http_gateway, test_helpers::*};
+    use habitat_common::types::ListenCtlAddr;
+    use habitat_core::package::{ident::PackageIdent, PackageInstall};
     use serde_json;
-
-    use self::{
-        manager::{sys::Sys, FsCfg},
-        ServiceSpec,
-    };
-    use crate::common::types::ListenCtlAddr;
-    use crate::config::GossipListenAddr;
-    use crate::http_gateway;
-    use crate::test_helpers::*;
+    use std::{path::PathBuf, str::FromStr};
 
     #[test]
     fn service_proxy_conforms_to_the_schema() {
@@ -1279,7 +1248,7 @@ mod tests {
         let asys = Arc::new(sys);
         let fscfg = FsCfg::new("/tmp");
         let afs = Arc::new(fscfg);
-        let gs = Arc::new(RwLock::new(manager::GatewayState::default()));
+        let gs = Arc::new(RwLock::new(GatewayState::default()));
         let service = Service::new(asys, install, spec, afs, Some("haha"), gs)
             .expect("I wanted a service to load, but it didn't");
 

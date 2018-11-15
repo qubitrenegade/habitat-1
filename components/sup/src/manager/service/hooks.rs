@@ -12,20 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std;
-use std::io::prelude::*;
-use std::path::{Path, PathBuf};
-#[cfg(not(windows))]
-use std::process::ExitStatus;
-
-use crate::common::templating::hooks::{self, ExitCode, Hook, HookOutput, RenderPair};
-use crate::common::templating::package::Pkg;
-use crate::common::templating::TemplateRenderer;
+use super::health;
+use crate::common::templating::{
+    hooks::{self, ExitCode, Hook, HookOutput, RenderPair},
+    package::Pkg,
+    TemplateRenderer,
+};
 #[cfg(windows)]
 use crate::hcore::os::process::windows_child::ExitStatus;
 use serde::Serialize;
-
-use super::health;
+#[cfg(not(windows))]
+use std::process::ExitStatus;
+use std::{
+    self,
+    io::prelude::*,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+};
 
 static LOGKEY: &'static str = "HK";
 
@@ -584,7 +587,9 @@ pub struct HookTable {
     pub suitability: Option<SuitabilityHook>,
     pub run: Option<RunHook>,
     pub post_run: Option<PostRunHook>,
-    pub post_stop: Option<PostStopHook>,
+    // This Arc<Mutex<>> business is a possibly-temporary state while
+    // we refactor hooks to be able to run asynchronously.
+    pub post_stop: Option<Arc<Mutex<PostStopHook>>>,
 }
 
 impl HookTable {
@@ -605,7 +610,8 @@ impl HookTable {
                 table.reconfigure = ReconfigureHook::load(package_name, &hooks_path, &templates);
                 table.run = RunHook::load(package_name, &hooks_path, &templates);
                 table.post_run = PostRunHook::load(package_name, &hooks_path, &templates);
-                table.post_stop = PostStopHook::load(package_name, &hooks_path, &templates);
+                table.post_stop = PostStopHook::load(package_name, &hooks_path, &templates)
+                    .map(|h| Arc::new(Mutex::new(h)));
             }
         }
         debug!(
@@ -652,7 +658,8 @@ impl HookTable {
             changed = self.compile_one(hook, service_group, ctx) || changed;
         }
         if let Some(ref hook) = self.post_stop {
-            changed = self.compile_one(hook, service_group, ctx) || changed;
+            let h = hook.lock().expect("post-stop hook lock poisoned");
+            changed = self.compile_one(&*h, service_group, ctx) || changed;
         }
         changed
     }

@@ -26,7 +26,9 @@ use time::{self, Duration as TimeDuration, Timespec};
 use toml;
 
 use crate::butterfly;
-use crate::common::{command::package::install::InstallSource, ui::UIWriter};
+use crate::common::{
+    command::package::install::InstallSource, templating::package::Pkg, ui::UIWriter,
+};
 use crate::ctl_gateway::CtlRequest;
 use crate::error::{Error, Result};
 use crate::hcore::{
@@ -38,7 +40,7 @@ use crate::hcore::{
 use crate::manager::{
     service::{
         spec::{IntoServiceSpec, ServiceSpec},
-        CompositeSpec, DesiredState, Pkg, ProcessState, Spec,
+        CompositeSpec, DesiredState, ProcessState, Spec,
     },
     ManagerConfig, ManagerState,
 };

@@ -44,8 +44,7 @@ use serde_json::{self, Value as Json};
 
 use crate::error::{Result, SupError};
 use crate::manager;
-use crate::manager::service::hooks::HealthCheckHook;
-use crate::manager::service::HealthCheck;
+use crate::manager::service::{HealthCheck, HealthCheckHook};
 
 use crate::feat;
 
