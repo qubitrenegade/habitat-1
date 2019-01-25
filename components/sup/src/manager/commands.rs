@@ -230,8 +230,8 @@ pub fn service_load(
     let bldr_url = opts.bldr_url.clone().unwrap_or_default();
     let bldr_channel = opts
         .bldr_channel
-        .as_ref()
-        .map(|s| ChannelIdent::from(s))
+        .clone()
+        .map(ChannelIdent::from)
         .unwrap_or_default();
     let force = opts.force.unwrap_or(false);
     let source = InstallSource::Ident(ident.clone(), *PackageTarget::active_target());
@@ -297,7 +297,7 @@ pub fn service_load(
                         req,
                         &source,
                         &service_spec.bldr_url,
-                        &ChannelIdent::from(&service_spec.channel),
+                        &ChannelIdent::from(service_spec.channel.clone()),
                         true,
                     )?;
 
