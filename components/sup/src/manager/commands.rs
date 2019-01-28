@@ -34,7 +34,6 @@ use crate::hcore::{
     package::metadata::PackageType,
     package::{Identifiable, PackageIdent, PackageInstall, PackageTarget},
     service::ServiceGroup,
-    ChannelIdent,
 };
 use crate::manager::{
     service::{
@@ -300,7 +299,7 @@ pub fn service_load(
                         req,
                         &source,
                         &service_spec.bldr_url,
-                        &ChannelIdent::from(service_spec.channel.clone()),
+                        &service_spec.channel,
                         true,
                     )?;
 
