@@ -34,6 +34,7 @@ use crate::hcore::{
     package::metadata::PackageType,
     package::{Identifiable, PackageIdent, PackageInstall, PackageTarget},
     service::ServiceGroup,
+    ChannelIdent,
 };
 use crate::manager::{
     service::{
@@ -233,7 +234,7 @@ pub fn service_load(
     let bldr_channel = opts
         .bldr_channel
         .clone()
-        .map(protocol::types::ChannelIdent::into)
+        .map(ChannelIdent::from)
         .unwrap_or_default();
     let force = opts.force.unwrap_or(false);
     let source = InstallSource::Ident(ident.clone(), *PackageTarget::active_target());
