@@ -12,26 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::ffi::OsStr;
-use std::fmt;
-use std::fs::File;
-use std::io::prelude::*;
-use std::io::BufReader;
+use super::{package::Pkg, TemplateRenderer};
+use crate::error::{Error, Result};
+#[cfg(windows)]
+use habitat_core::os::process::windows_child::{Child, ExitStatus};
+use habitat_core::{crypto, fs, outputln};
+use serde::{Serialize, Serializer};
 #[cfg(unix)]
 use std::os::unix::process::{CommandExt, ExitStatusExt};
-use std::path::{Path, PathBuf};
 #[cfg(not(windows))]
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::result;
-
-#[cfg(windows)]
-use crate::hcore::os::process::windows_child::{Child, ExitStatus};
-use crate::hcore::{self, crypto, fs, outputln};
-use serde::{Serialize, Serializer};
-
-use super::package::Pkg;
-use super::TemplateRenderer;
-use crate::error::{Error, Result};
+use std::{
+    ffi::OsStr,
+    fmt,
+    fs::File,
+    io::{self, prelude::*, BufReader},
+    path::{Path, PathBuf},
+    result,
+};
 
 #[cfg(not(windows))]
 pub const HOOK_PERMISSIONS: u32 = 0o755;
@@ -157,15 +155,15 @@ pub trait Hook: fmt::Debug + Sized + Send {
     }
 
     #[cfg(not(windows))]
-    fn set_permissions<T: AsRef<Path>>(path: T) -> hcore::error::Result<()> {
-        use crate::hcore::util::posix_perm;
+    fn set_permissions<T: AsRef<Path>>(path: T) -> habitat_core::error::Result<()> {
+        use habitat_core::util::posix_perm;
 
         posix_perm::set_permissions(path.as_ref(), HOOK_PERMISSIONS)
     }
 
     #[cfg(windows)]
-    fn set_permissions<T: AsRef<Path>>(path: T) -> hcore::error::Result<()> {
-        use crate::hcore::util::win_perm;
+    fn set_permissions<T: AsRef<Path>>(path: T) -> habitat_core::error::Result<()> {
+        use habitat_core::util::win_perm;
 
         win_perm::harden_path(path.as_ref())
     }
@@ -247,7 +245,7 @@ pub trait Hook: fmt::Debug + Sized + Send {
         T: ToString,
         S: AsRef<OsStr>,
     {
-        use crate::hcore::os::users;
+        use habitat_core::os::users;
 
         let mut cmd = Command::new(path.as_ref());
         cmd.stdin(Stdio::null())
@@ -532,15 +530,14 @@ impl<'a> HookOutput<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::hcore::package::{PackageIdent, PackageInstall};
-    use crate::hcore::service::ServiceGroup;
+    use habitat_core::{
+        package::{PackageIdent, PackageInstall},
+        service::ServiceGroup,
+    };
     use tempfile::TempDir;
 
     use super::*;
-    use crate::templating::config::Cfg;
-    use crate::templating::context::RenderContext;
-    use crate::templating::package::Pkg;
-    use crate::templating::test_helpers::*;
+    use crate::templating::{config::Cfg, context::RenderContext, package::Pkg, test_helpers::*};
 
     // Turns out it's useful for Hooks to implement AsRef<Path>, at
     // least for these tests. Ideally, this would be useful to use
