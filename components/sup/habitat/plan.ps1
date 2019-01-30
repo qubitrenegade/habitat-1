@@ -16,7 +16,8 @@ $pkg_deps=@(
 $pkg_build_deps = @(
     "core/visual-cpp-build-tools-2015",
     "core/rust",
-    "core/cacerts"
+    "core/cacerts",
+    "core/raml2html"
 )
 
 function Invoke-Prepare {
@@ -24,7 +25,7 @@ function Invoke-Prepare {
         $env:CARGO_TARGET_DIR           = "$env:HAB_CARGO_TARGET_DIR"
     }
     else {
-        $env:CARGO_TARGET_DIR           = "$env:HAB_CACHE_SRC_PATH/$pkg_dirname"
+        $env:CARGO_TARGET_DIR           = "$HAB_CACHE_SRC_PATH/$pkg_dirname"
     }
 
     $env:SSL_CERT_FILE              = "$(Get-HabPackagePath "cacerts")/ssl/certs/cacert.pem"
@@ -50,7 +51,7 @@ function Invoke-Prepare {
 function Invoke-Build {
     Push-Location "$PLAN_CONTEXT"
     try {
-        cargo build --release --no-default-features
+        cargo build --release --no-default-features --features apidocs
         if($LASTEXITCODE -ne 0) {
             Write-Error "Cargo build failed!"
         }
