@@ -22,12 +22,11 @@ use super::{terminator, ProcessState};
 use crate::error::{Error, Result, SupError};
 use futures::{future, Future};
 use habitat_common::templating::package::Pkg;
+#[cfg(unix)]
+use habitat_core::os::users;
 use habitat_core::{
     fs,
-    os::{
-        process::{self, Pid},
-        users,
-    },
+    os::process::{self, Pid},
     service::ServiceGroup,
 };
 use habitat_launcher_client::LauncherCli;

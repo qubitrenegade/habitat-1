@@ -26,7 +26,7 @@ use std::{
     ffi::OsStr,
     fmt,
     fs::File,
-    io::{self, prelude::*, BufReader},
+    io::{prelude::*, BufReader},
     path::{Path, PathBuf},
     result,
 };
@@ -246,6 +246,7 @@ pub trait Hook: fmt::Debug + Sized + Send {
         S: AsRef<OsStr>,
     {
         use habitat_core::os::users;
+        use std::io::Error as IoError;
 
         let mut cmd = Command::new(path.as_ref());
         cmd.stdin(Stdio::null())
@@ -290,7 +291,7 @@ pub trait Hook: fmt::Debug + Sized + Send {
             if unsafe { libc::setpgid(0, 0) } == 0 {
                 Ok(())
             } else {
-                Err(io::Error::last_os_error())
+                Err(IoError::last_os_error())
             }
         });
 
