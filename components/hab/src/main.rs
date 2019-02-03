@@ -676,6 +676,7 @@ fn sub_plan_render(ui: &mut UI, m: &ArgMatches<'_>) -> Result<()> {
     };
 
     let print = m.is_present("PRINT");
+    let no_render_dir = m.is_present("NO_WRITE_FILE");
 
     let render_dir = match m.value_of("RENDER_DIR") {
         Some(name) => name.to_string(),
@@ -689,6 +690,7 @@ fn sub_plan_render(ui: &mut UI, m: &ArgMatches<'_>) -> Result<()> {
       user_toml_path,
       mock_data_path,
       print,
+      no_render_dir,
       render_dir,
     )
 }
