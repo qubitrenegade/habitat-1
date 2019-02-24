@@ -157,7 +157,7 @@ fn create_with_template(ui: &mut UI, location: &std::path::PathBuf, template: &s
         ui.status(Status::Creating, format!("file: {:?}", location))?;
     }
     // Create our render directory.
-    create_dir_all(directory)?;
+    create_dir_all(location)?;
     // Write file to disk
     File::create(path).and_then(|mut file| file.write(template.as_bytes()))?;
     Ok(())
