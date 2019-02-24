@@ -61,6 +61,7 @@ pub enum Error {
     JobGroupPromoteOrDemote(api_client::Error, bool /* promote */),
     JobGroupCancel(api_client::Error),
     JobGroupPromoteOrDemoteUnprocessable(bool /* promote */),
+    JsonErr(serde_json::Error),
     NameLookup,
     NetErr(net::NetErr),
     PackageArchiveMalformed(String),
@@ -238,6 +239,7 @@ impl error::Error for Error {
             Error::ProvidesError(_) => {
                 "Can't find a package that provides the given search parameter"
             }
+            Error::JsonErr(ref err) => err.description(),
             Error::RemoteSupResolutionError(_, ref err) => err.description(),
             Error::RootRequired => {
                 "Root or administrator permissions required to complete operation"
@@ -320,5 +322,11 @@ impl From<SrvClientError> for Error {
 impl From<net::NetErr> for Error {
     fn from(err: net::NetErr) -> Self {
         Error::NetErr(err)
+    }
+}
+
+impl From<serde_json::Error> for Error {
+    fn from(err: serde_json::Error) -> Self {
+        Error::JsonErr(err)
     }
 }
